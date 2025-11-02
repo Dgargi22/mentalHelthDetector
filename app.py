@@ -6,6 +6,7 @@ import speech_recognition as sr
 import tempfile
 import re
 import os
+import subprocess 
 
 # --- Model & App Setup ---
 
@@ -35,40 +36,73 @@ STRESS_KEYWORDS = {
 
 # --- Analysis Functions ---
 
-def analyze_depression_level(text, emotions):
+def analyze_mood_level(text, emotions):
+    """
+    Analyzes text for keywords, sentiment, and emotion, then calculates a 
+    Mood Rating (0=Bad, 100=Good).
+    """
     text_lower = text.lower()
+    
+    # 1. Calculate Low Mood Keyword Score (Base: 0=Good, >0=Bad)
     high = sum(1 for k in DEPRESSION_KEYWORDS['high_risk'] if k in text_lower)
     med = sum(1 for k in DEPRESSION_KEYWORDS['medium_risk'] if k in text_lower)
     low = sum(1 for k in DEPRESSION_KEYWORDS['low_risk'] if k in text_lower)
-    keyword_score = (high * 90) + (med * 35) + (low * 10)
+    # Total potential score for keywords is high (e.g., 90*1 + 35*1 + 10*1 = 135)
+    keyword_score = (high * 100) + (med * 40) + (low * 15)
     
-    dominant_emotion = emotions.get('dominant', 'neutral')
-    emotion_multiplier = 1.0
+    # 2. Calculate Sentiment Polarity (-1.0=Negative, 1.0=Positive)
+    sentiment_polarity = TextBlob(text).sentiment.polarity
+    
+    # 3. Apply Emotion Score from Model (Focus on negative emotions)
+    sadness_score = emotions['all_emotions'].get('sadness', 0)
+    anger_score = emotions['all_emotions'].get('anger', 0)
+    fear_score = emotions['all_emotions'].get('fear', 0)
+    
+    # Scale negative emotion scores up to 100
+    negative_emotion_score = (sadness_score + anger_score + fear_score) / 3 
+    
+    # 4. Combine factors to get a raw LOW MOOD SCORE (0-100 range)
+    # The new formula gives more weight to the emotion model and sentiment
+    
+    # Raw low mood score is initially high if text is negative
+    # Max possible value is 100
+    raw_low_mood = (
+        (keyword_score * 0.3) + # 30% weight from keywords (scaled)
+        ((1 - sentiment_polarity) * 50) + # 50% weight from negative sentiment
+        (negative_emotion_score * 0.7) # 70% weight from negative emotions
+    )
 
-    if dominant_emotion in ['joy', 'love', 'optimism']:
-        emotion_multiplier = 0.2
-    elif dominant_emotion in ['sadness', 'fear', 'disgust']:
-        emotion_multiplier = 1.2
+    # Normalize and clip the final low_mood_score
+    low_mood_score = min(100, raw_low_mood / 1.5) # Divide by a factor to normalize, 1.5 is a good test value
+    low_mood_score = max(0, low_mood_score)
     
-    final_score = min(100, keyword_score * emotion_multiplier)
+    # 5. INVERT to get MOOD RATING (0=Bad, 100=Good)
+    mood_rating_score = 100 - low_mood_score 
+
     
-    if final_score >= 85:
-        level, score = "DANGEROUS LEVEL", 95
-        msg = "⚠️ Your words show significant signs of distress. Please connect with someone immediately. You can call or text 988 (US) or your local crisis line."
-    elif final_score >= 65:
-        level, score = "HIGH RISK", 75
-        msg = "🔴 High depression risk detected. These are heavy feelings. Professional help is strongly advised."
-    elif final_score >= 35:
-        level, score = "MODERATE RISK", 50
-        msg = "🟡 We're noticing moderate signs of low mood. It's important to be gentle with yourself today."
-    elif final_score > 10:
-        level, score = "LOW RISK", 20
-        msg = "🟢 Your text shows no major signs of depression. Good to see you checking in."
+    # 6. Determine Level and Message (Higher is better)
+    if mood_rating_score >= 80:
+        level, label_class = "GREAT MOOD", "great-mood"
+        msg = "☀️ Your mood is excellent! Your reflections are very positive and light."
+    elif mood_rating_score >= 60:
+        level, label_class = "GOOD MOOD", "good-mood"
+        msg = "😊 A good day! You're showing signs of positivity and balance."
+    elif mood_rating_score >= 40:
+        level, label_class = "NEUTRAL", "neutral-mood"
+        msg = "☁️ You seem to be feeling neutral, perhaps a bit balanced or mellow. Keep checking in."
+    elif mood_rating_score >= 20:
+        level, label_class = "LOW MOOD", "low-mood"
+        msg = "😔 We're noticing some signs of heaviness or sadness. Be kind to yourself today."
     else:
-        level, score = "VERY LOW", 10
-        msg = "🟢 Your text shows no major signs of depression. We're glad to see that."
+        level, label_class = "VERY LOW MOOD", "very-low-mood"
+        msg = "⚠️ Your words show significant signs of distress. Please reach out to a support line immediately. You are not alone."
 
-    return {'level': level, 'score': int(final_score), 'explanation': msg}
+    return {
+        'level': level, 
+        'score': int(mood_rating_score), 
+        'explanation': msg, 
+        'label_class': label_class 
+    }
 
 def analyze_stress_level(text, emotions):
     text_lower = text.lower()
@@ -102,7 +136,6 @@ def analyze_stress_level(text, emotions):
 
 def analyze_emotions(text):
     try:
-        # Truncate text for model stability
         truncated_text = text[:1000]
         results = emotion_classifier(truncated_text)[0]
         emotions = {r['label']: round(r['score'] * 100, 1) for r in results}
@@ -112,18 +145,18 @@ def analyze_emotions(text):
         print(f"Error in emotion analysis (text might be too short/unusual): {e}")
         return {'dominant': 'neutral', 'all_emotions': {'neutral': 100.0}}
 
-def get_recommendations(depression, stress):
+def get_recommendations(mood, stress):
     recs = []
     
-    if depression['score'] >= 85:
+    if mood['score'] <= 15: # Very low mood
         recs.append("Please connect with someone immediately. You can call or text 988 (US) or your local crisis line. They are there to listen.")
     if stress['score'] >= 70:
         recs.append("You seem overwhelmed. Try a 5-4-3-2-1 grounding exercise: Name 5 things you see, 4 you feel, 3 you hear, 2 you smell, 1 you taste.")
-    if depression['score'] >= 65 and depression['score'] < 85:
+    if mood['score'] <= 35 and mood['score'] > 15: # Low mood
         recs.append("It sounds like you're carrying a heavy load. It might be a good time to talk to a therapist or a trusted friend about these feelings.")
     if stress['score'] >= 40 and stress['score'] < 70:
         recs.append("Your tension levels seem elevated. A short 10-minute walk outside, without your phone, can make a big difference.")
-    if depression['score'] < 35 and stress['score'] < 40:
+    if mood['score'] >= 75 and stress['score'] < 40:
         recs.append("It's great that you're checking in. Keep up the self-awareness! Maintaining this balance is a healthy practice.")
     if not recs:
         recs.append("Taking a moment to check in with yourself is a healthy step. Continue to be mindful of your feelings as you go about your day.")
@@ -147,7 +180,6 @@ def speech_to_text(audio_file_path):
         print(f"Could not request results from Google Speech Recognition service; {e}")
         return None
     except Exception as e:
-        # THIS IS THE ERROR YOU WERE SEEING
         print(f"Error in speech_to_text: {e}") 
         return None
 
@@ -160,8 +192,8 @@ def home():
 @app.route('/analyze', methods=['POST'])
 def analyze():
     text_input = None
-    temp_webm_path = None # Original file from browser
-    temp_wav_path = None  # Converted file for speech_recognition
+    temp_webm_path = None 
+    temp_wav_path = None 
     print("Received request to /analyze")
 
     try:
@@ -172,45 +204,46 @@ def analyze():
             print("Received audio file.")
             file = request.files['audio']
             
-            # 1. Save the original .webm file
             with tempfile.NamedTemporaryFile(delete=False, suffix=".webm") as temp_audio:
                 file.save(temp_audio.name)
                 temp_webm_path = temp_audio.name
 
-            # 2. Create a name for the output .wav file
             temp_wav_path = temp_webm_path.replace(".webm", ".wav")
 
-            # 3. Run ffmpeg to convert the file
             print(f"Converting {temp_webm_path} to {temp_wav_path}...")
-            # -loglevel quiet: supresses ffmpeg's console spam
-            # -y: overwrite output file if it exists
-            # -ac 1: set audio channels to 1 (mono)
-            # -ar 16000: set audio sample rate to 16kHz (good for STT)
-            command = f"ffmpeg -i {temp_webm_path} -ac 1 -ar 16000 -y {temp_wav_path} -loglevel quiet"
-            return_code = os.system(command) # Run the command
             
-            if return_code != 0:
-                print(f"ffmpeg conversion failed with code {return_code}")
+            command = [
+                "ffmpeg",
+                "-i", temp_webm_path,
+                "-ac", "1",
+                "-ar", "16000",
+                "-y", temp_wav_path,
+                "-loglevel", "quiet"
+            ]
+            
+            result = subprocess.run(command, capture_output=True, text=True)
+            
+            if result.returncode != 0:
+                print(f"ffmpeg conversion failed with code {result.returncode}")
+                print(f"ffmpeg stderr: {result.stderr}")
                 raise Exception("ffmpeg audio conversion failed.") 
             
-            # 4. Pass the *converted* .wav file to speech_to_text
             text_input = speech_to_text(temp_wav_path)
             
         if not text_input:
             print("Analysis failed: No valid text or unclear audio.")
-            # *** FIX: Return a 400 Bad Request error to trigger JS .catch() ***
             return jsonify({'error': 'No valid text or voice input detected, or audio was unclear.'}), 400
 
         print("Running AI analysis...")
         emotion = analyze_emotions(text_input) 
-        depression = analyze_depression_level(text_input, emotion) 
+        mood = analyze_mood_level(text_input, emotion) 
         stress = analyze_stress_level(text_input, emotion) 
-        recs = get_recommendations(depression, stress)
+        recs = get_recommendations(mood, stress) 
         print("Analysis complete. Sending response.")
 
         return jsonify({
             'text': text_input,
-            'depression': depression,
+            'mood': mood, 
             'stress': stress,
             'emotion': emotion,
             'recommendations': recs
@@ -221,7 +254,6 @@ def analyze():
         return jsonify({'error': f'An internal server error occurred: {str(e)}'}), 500
     
     finally:
-        # 5. Clean up *both* files
         if temp_webm_path and os.path.exists(temp_webm_path):
             os.remove(temp_webm_path)
             print(f"Cleaned up temp file: {temp_webm_path}")
@@ -233,5 +265,3 @@ def analyze():
 if __name__ == '__main__':
     print("Starting Flask server...")
     app.run(debug=True)
-
-
