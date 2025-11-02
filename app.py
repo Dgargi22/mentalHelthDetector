@@ -1,128 +1,123 @@
-# app.py
-from flask import Flask, render_template, request, jsonify
+rom flask import Flask, render_template, request, jsonify
+from flask_cors import CORS
 from textblob import TextBlob
 from transformers import pipeline
 import speech_recognition as sr
-import tempfile
-import re
+import io
 import os
 
-# Load emotion analysis model once
+# --- Load emotion model ---
+print("🔄 Loading emotion classification model...")
 emotion_classifier = pipeline(
     'text-classification',
     model='j-hartmann/emotion-english-distilroberta-base',
-    return_all_scores=True
+    top_k=None
 )
+print("✅ Emotion model loaded successfully.")
 
-app = Flask(__name__)
+# --- Flask setup ---
+app = Flask(__name__, template_folder='templates', static_folder='static')
+CORS(app)
 
-# Depression and stress keyword sets
+# --- Keyword Dictionaries ---
 DEPRESSION_KEYWORDS = {
-    'high_risk': ['suicide', 'kill myself', 'end it all', 'want to die', 'better off dead', 'harm myself', 'no point living'],
-    'medium_risk': ['hopeless', 'empty', 'numb', 'cant go on', 'cant cope', 'overwhelmed', 'dont care anymore'],
-    'low_risk': ['sad', 'unhappy', 'down', 'tired', 'sleepy', 'lonely', 'alone']
+    'high_risk': ['suicide', 'kill myself', 'end it all', 'want to die', 'better off dead', 'harm myself'],
+    'medium_risk': ['hopeless', 'empty', 'numb', 'cant go on', 'worthless', 'no future'],
+    'low_risk': ['sad', 'unhappy', 'down', 'crying', 'exhausted', 'lonely']
 }
 
 STRESS_KEYWORDS = {
-    'high': ['overwhelmed', 'cant handle', 'breaking down', 'too much pressure', 'drowning', 'panic'],
-    'medium': ['stressed', 'anxious', 'worried', 'pressure', 'nervous', 'tense'],
-    'low': ['busy', 'tired', 'concerned', 'apprehensive']
+    'high': ['overwhelmed', 'cant handle', 'breaking down', 'too much pressure', 'panic', 'panic attack'],
+    'medium': ['stressed', 'anxious', 'worried', 'pressure', 'tense', "can't sleep"],
+    'low': ['busy', 'tired', 'concerned', 'distracted']
 }
 
-# --- Analysis Functions ---
-def analyze_depression_level(text):
-    text_lower = text.lower()
-    high = sum(1 for k in DEPRESSION_KEYWORDS['high_risk'] if k in text_lower)
-    med = sum(1 for k in DEPRESSION_KEYWORDS['medium_risk'] if k in text_lower)
-    low = sum(1 for k in DEPRESSION_KEYWORDS['low_risk'] if k in text_lower)
+# --- Emotion Analysis ---
+def analyze_emotions(text):
+    try:
+        truncated = text[:1000]
+        results = emotion_classifier(truncated)[0]
+        emotions = {r['label']: round(r['score'] * 100, 1) for r in results}
+        dominant = max(emotions, key=emotions.get)
+        return {'dominant': dominant, 'all_emotions': emotions}
+    except Exception as e:
+        print(f"[Error: Emotion Analysis] {e}")
+        return {'dominant': 'neutral', 'all_emotions': {'neutral': 100.0}}
 
-    if high > 0:
-        level, score = "DANGEROUS LEVEL", 90
-        msg = "⚠️ IMMEDIATE ATTENTION NEEDED: Severe depression signs detected."
-    elif med >= 2:
-        level, score = "HIGH RISK", 70
-        msg = "🔴 High depression risk detected. Professional help is strongly advised."
-    elif low >= 3 or med >= 1:
-        level, score = "MODERATE RISK", 50
-        msg = "🟡 Moderate signs of low mood or sadness."
+# --- Depression Analysis ---
+def analyze_depression_level(text, emotions):
+    text = text.lower()
+    high = sum(k in text for k in DEPRESSION_KEYWORDS['high_risk'])
+    med = sum(k in text for k in DEPRESSION_KEYWORDS['medium_risk'])
+    low = sum(k in text for k in DEPRESSION_KEYWORDS['low_risk'])
+    keyword_score = (high * 90) + (med * 35) + (low * 10)
+
+    multiplier = 1.0
+    if emotions.get('dominant') in ['joy', 'love']:
+        multiplier = 0.3
+    elif emotions.get('dominant') in ['sadness', 'fear']:
+        multiplier = 1.2
+
+    final_score = min(100, keyword_score * multiplier)
+
+    if final_score >= 85:
+        return {'level': 'DANGEROUS LEVEL', 'score': 95,
+                'explanation': "⚠️ Severe distress detected. Please talk to someone immediately."}
+    elif final_score >= 65:
+        return {'level': 'HIGH RISK', 'score': 75,
+                'explanation': "🔴 High depression risk detected. Professional help is advised."}
+    elif final_score >= 35:
+        return {'level': 'MODERATE RISK', 'score': 50,
+                'explanation': "🟡 Some sadness detected. Take care and reach out if needed."}
+    elif final_score > 10:
+        return {'level': 'LOW RISK', 'score': 20,
+                'explanation': "🟢 Mild sadness signs. Stay mindful."}
     else:
-        level, score = "LOW RISK", 20
-        msg = "🟢 Your text shows no major signs of depression."
+        return {'level': 'VERY LOW', 'score': 10,
+                'explanation': "🟢 No depressive cues detected."}
 
-    return {'level': level, 'score': score, 'explanation': msg}
-
-def analyze_stress_level(text):
-    text_lower = text.lower()
-    high = sum(1 for k in STRESS_KEYWORDS['high'] if k in text_lower)
-    med = sum(1 for k in STRESS_KEYWORDS['medium'] if k in text_lower)
-    low = sum(1 for k in STRESS_KEYWORDS['low'] if k in text_lower)
+# --- Stress Analysis ---
+def analyze_stress_level(text, emotions):
+    text = text.lower()
+    high = sum(k in text for k in STRESS_KEYWORDS['high'])
+    med = sum(k in text for k in STRESS_KEYWORDS['medium'])
+    low = sum(k in text for k in STRESS_KEYWORDS['low'])
 
     polarity = TextBlob(text).sentiment.polarity
-    base_stress = abs(polarity) * 30
+    base = (1 - polarity) * 20
     keyword_stress = (high * 40) + (med * 25) + (low * 10)
-    stress_score = min(100, base_stress + keyword_stress)
+    total = base + keyword_stress
 
-    if stress_score >= 70:
-        level, msg = "HIGH STRESS", "🔴 High stress detected. Take immediate steps to relax."
-    elif stress_score >= 40:
-        level, msg = "MODERATE STRESS", "🟡 Moderate stress. Try mindfulness or rest."
+    multiplier = 1.0
+    if emotions.get('dominant') in ['joy', 'love']:
+        multiplier = 0.3
+    elif emotions.get('dominant') in ['anger', 'fear']:
+        multiplier = 1.3
+
+    score = min(100, total * multiplier)
+
+    if score >= 70:
+        return {'level': 'HIGH STRESS', 'score': int(score),
+                'explanation': "🔴 High stress detected. Try to pause and calm your mind."}
+    elif score >= 40:
+        return {'level': 'MODERATE STRESS', 'score': int(score),
+                'explanation': "🟡 Moderate tension detected. Relaxation may help."}
     else:
-        level, msg = "LOW STRESS", "🟢 You appear calm and balanced."
+        return {'level': 'LOW STRESS', 'score': int(score),
+                'explanation': "🟢 You appear calm and balanced."}
 
-    return {'level': level, 'score': int(stress_score), 'explanation': msg}
-
-def analyze_emotions(text):
-    results = emotion_classifier(text)[0]
-    emotions = {r['label']: round(r['score'] * 100, 1) for r in results}
-    dominant = max(emotions, key=emotions.get)
-    return {'dominant': dominant, 'all_emotions': emotions}
-
+# --- Recommendations ---
 def get_recommendations(depression, stress):
-    rec = []
-
-    if depression['score'] >= 70:
-        rec += [
-            "🚨 Contact a mental health professional immediately.",
-            "Call Helpline: 988 (US) or your local support line.",
-            "Avoid isolation—reach out to trusted people."
-        ]
-    elif depression['score'] >= 50:
-        rec += [
-            "📞 Talk to a counselor or therapist soon.",
-            "Keep a daily gratitude or mood journal.",
-            "Focus on sleep, sunlight, and healthy meals."
-        ]
-    else:
-        rec += [
-            "💚 Keep practicing self-care.",
-            "Maintain social connections.",
-            "Stay active and hydrated."
-        ]
-
+    recs = []
+    if depression['score'] >= 85:
+        recs.append("Reach out to a trusted friend or helpline immediately.")
     if stress['score'] >= 70:
-        rec += [
-            "🧘 Try breathing exercises (4-7-8 technique).",
-            "Take breaks often and delegate tasks."
-        ]
-    elif stress['score'] >= 40:
-        rec += [
-            "🎧 Listen to calming music.",
-            "Take short walks or stretch breaks."
-        ]
-
-    return rec
-
-# --- Voice Recognition ---
-def speech_to_text(audio_file):
-    recognizer = sr.Recognizer()
-    with sr.AudioFile(audio_file) as source:
-        audio_data = recognizer.record(source)
-    try:
-        return recognizer.recognize_google(audio_data)
-    except sr.UnknownValueError:
-        return None
-    except sr.RequestError:
-        return None
+        recs.append("Try breathing deeply and take short breaks.")
+    if depression['score'] >= 35 and stress['score'] >= 40:
+        recs.append("Journaling your thoughts can help bring clarity.")
+    if depression['score'] < 35 and stress['score'] < 40:
+        recs.append("Keep maintaining your mental balance — great job!")
+    return list(dict.fromkeys(recs))[:3]
 
 # --- Routes ---
 @app.route('/')
@@ -131,36 +126,46 @@ def home():
 
 @app.route('/analyze', methods=['POST'])
 def analyze():
-    text_input = None
+    try:
+        text_input = None
 
-    # Case 1: Text input
-    if 'text' in request.form and request.form['text'].strip():
-        text_input = request.form['text'].strip()
+        # --- Handle text input ---
+        if 'text' in request.form and request.form['text'].strip():
+            text_input = request.form['text'].strip()
 
-    # Case 2: Voice input (file)
-    elif 'audio' in request.files:
-        file = request.files['audio']
-        with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as temp_audio:
-            file.save(temp_audio.name)
-            text_input = speech_to_text(temp_audio.name)
-        os.remove(temp_audio.name)
+        # --- Handle audio input ---
+        elif 'audio' in request.files:
+            audio_file = request.files['audio']
+            recognizer = sr.Recognizer()
+            with sr.AudioFile(io.BytesIO(audio_file.read())) as source:
+                audio_data = recognizer.record(source)
+                try:
+                    text_input = recognizer.recognize_google(audio_data)
+                except sr.UnknownValueError:
+                    return jsonify({'error': 'Could not understand audio.'})
+                except sr.RequestError:
+                    return jsonify({'error': 'Speech recognition service unavailable.'})
 
-    if not text_input:
-        return jsonify({'error': 'No valid text or voice input detected'})
+        if not text_input:
+            return jsonify({'error': 'No valid text or audio input received.'})
 
-    # Run analysis
-    depression = analyze_depression_level(text_input)
-    stress = analyze_stress_level(text_input)
-    emotion = analyze_emotions(text_input)
-    recs = get_recommendations(depression, stress)
+        emotion = analyze_emotions(text_input)
+        depression = analyze_depression_level(text_input, emotion)
+        stress = analyze_stress_level(text_input, emotion)
+        recs = get_recommendations(depression, stress)
 
-    return jsonify({
-        'text': text_input,
-        'depression': depression,
-        'stress': stress,
-        'emotion': emotion,
-        'recommendations': recs
-    })
+        return jsonify({
+            'text': text_input,
+            'emotion': emotion,
+            'depression': depression,
+            'stress': stress,
+            'recommendations': recs
+        })
+
+    except Exception as e:
+        print(f"[Error: /analyze] {e}")
+        return jsonify({'error': f'Internal server error: {str(e)}'})
 
 if __name__ == '__main__':
-    app.run(debug=True)
+    print("🚀 Flask server starting...")
+    app.run(debug=True, host='0.0.0.0', port=5000)
