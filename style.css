@@ -391,75 +391,170 @@ textarea:focus {
     border-radius: 10px;
     margin: 10px 0;
     overflow: hidden;
-    box-shadow: inset 0 2px 4px rgba(0,0,0,0.1);
+    position: relative; /* Essential for containing the gradient layer */
 }
 
-.progress-fill {
+/* Base layer: Contains the full gradient and acts as the "scale" */
+.progress-fill-base {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
     height: 100%;
     border-radius: 10px;
-    transition: width 1s ease-in-out;
+}
+
+/* Top layer: Acts as the fill and has a solid color to hide the gradient */
+.progress-fill-clip {
+    position: absolute;
+    top: 0;
+    left: 0;
+    height: 100%;
+    border-radius: 10px;
+    transition: width 1s ease-in-out; /* The animation now correctly tracks width */
+}
+
+/* --- *** PROGRESS BAR GRADIENTS *** --- */
+
+/* Mood: Red (0%) to Green (100%). This is the base layer color. */
+#moodCard .progress-fill-base {
+    background: linear-gradient(90deg, rgb(191, 9, 47), #ffc107, #28a745); 
+}
+
+/* Stress: Green (0%) to Red (100%). This is the base layer color. */
+#stressCard .progress-fill-base {
     background: linear-gradient(90deg, #28a745, #ffc107, rgb(191, 9, 47));
 }
 
-.progress-value {
-    font-weight: bold;
-    font-size: 1.1em;
+
+/* --- *** MOOD/STRESS STYLES (Color of the solid fill/clip) *** --- */
+/* The color classes will now set the background of the .progress-fill-clip 
+   to a solid version of the current scale color. */
+
+/* For VERY LOW MOOD (Mood Score < 20) / HIGH STRESS (Stress Score >= 70) */
+.very-low-mood .progress-fill-clip, 
+.dangerous .progress-fill-clip {
+    background-color: rgb(191, 9, 47);
 }
 
+/* For LOW MOOD (Mood Score 20-39) */
+.low-mood .progress-fill-clip {
+    background-color: #d68910; 
+}
+
+/* For NEUTRAL (Mood Score 40-59) / MODERATE STRESS (Stress Score 40-69) */
+.neutral-mood .progress-fill-clip,
+.moderate-risk .progress-fill-clip {
+    background-color: #ffc107; 
+}
+
+/* For GOOD MOOD (Mood Score 60-79) */
+.good-mood .progress-fill-clip {
+    background-color: rgb(59, 151, 151);
+}
+
+/* For GREAT MOOD (Mood Score >= 80) / LOW STRESS (Stress Score < 40) */
+.great-mood .progress-fill-clip,
+.safe .progress-fill-clip {
+    background-color: #28a745;
+}
+
+
+/* --- CARD CLASSES (Keep these the same) --- */
+
+/* For VERY LOW MOOD (Score < 20) */
+.very-low-mood {
+    background: #f8d7da;
+    border-left-color: rgb(191, 9, 47);
+    color: #721c24;
+}
+.very-low-mood .insight-level {
+    background: rgb(191, 9, 47);
+    color: white;
+}
+
+/* For LOW MOOD (Score 20-39) */
+.low-mood {
+    background: #ffeaa7;
+    border-left-color: #d68910; 
+    color: #856404;
+}
+.low-mood .insight-level {
+    background: #d68910;
+    color: white;
+}
+
+/* For NEUTRAL (Score 40-59) */
+.neutral-mood {
+    background: #fff3cd;
+    border-left-color: #ffc107; 
+    color: #856404;
+}
+.neutral-mood .insight-level {
+    background: #ffc107;
+    color: #333; 
+}
+
+/* For GOOD MOOD (Score 60-79) */
+.good-mood {
+    background: #d1ecf1;
+    border-left-color: rgb(59, 151, 151);
+    color: #0c5460;
+}
+.good-mood .insight-level {
+    background: rgb(59, 151, 151);
+    color: white;
+}
+
+/* For GREAT MOOD (Score >= 80) */
+.great-mood {
+    background: #d4edda;
+    border-left-color: #28a745;
+    color: #155724;
+}
+.great-mood .insight-level {
+    background: #28a745;
+    color: white;
+}
+
+
+/* --- STRESS CLASSES (Stress Score 0-100, Lower is Better) --- */
+
+/* For HIGH STRESS (Stress Score >= 70) */
 .dangerous {
     background: #f8d7da;
     border-left-color: rgb(191, 9, 47);
     color: #721c24;
 }
-
 .dangerous .insight-level {
     background: rgb(191, 9, 47);
     color: white;
 }
 
-.high-risk {
-    background: #ffeaa7;
-    border-left-color: rgb(191, 9, 47);
-    color: #856404;
-}
-
-.high-risk .insight-level {
-    background: rgb(191, 9, 47);
-    color: white;
-}
-
+/* For MODERATE STRESS (Stress Score 40-69) */
 .moderate-risk {
     background: #fff3cd;
-    border-left-color: rgb(22, 71, 106);
+    border-left-color: #ffc107; 
     color: #856404;
 }
-
 .moderate-risk .insight-level {
-    background: rgb(22, 71, 106);
-    color: white;
+    background: #ffc107;
+    color: #333; 
 }
 
-.low-risk {
-    background: #d1ecf1;
-    border-left-color: rgb(59, 151, 151);
-    color: #0c5460;
-}
-
-.low-risk .insight-level {
-    background: rgb(59, 151, 151);
-    color: white;
-}
-
+/* For LOW STRESS (Stress Score < 40) */
 .safe {
     background: #d4edda;
     border-left-color: #28a745;
     color: #155724;
 }
-
 .safe .insight-level {
     background: #28a745;
     color: white;
 }
+
+/* --- *** END OF MOOD/STRESS STYLES *** --- */
+
 
 .emotions-section {
     background: #f8f9fa;
@@ -705,8 +800,6 @@ textarea:focus {
 .reflection-item {
     padding: 15px;
     border-bottom: 1px solid #e9ecef;
-    color: #495057;
-    font-style: italic;
 }
 
 .reflection-item:last-child {
@@ -798,4 +891,56 @@ textarea:focus {
         width: 100%;
         padding: 15px 20px;
     }
+}
+
+/* --- *** NEW STYLES FOR DASHBOARD SUGGESTIONS *** --- */
+.reflection-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 10px;
+    font-size: 0.9em;
+    flex-wrap: wrap; /* Added for responsiveness */
+    gap: 5px; /* Added for responsiveness */
+}
+
+.reflection-header strong {
+    font-size: 1.1em;
+    color: #343a40;
+}
+
+.reflection-header span {
+    font-weight: 500;
+    color: #6c757d;
+    white-space: nowrap; /* Prevents scores from wrapping */
+}
+
+.reflection-text {
+    color: #495057;
+    font-style: italic;
+    margin-bottom: 15px;
+    padding-left: 5px;
+}
+
+.reflection-suggestions {
+    list-style-type: none; /* Remove bullets */
+    padding: 10px 15px;
+    border-left: 3px solid #e9ecef;
+    margin: 15px 0 5px 5px; /* Indent the list */
+}
+
+.reflection-suggestions li {
+    font-size: 0.9em;
+    color: #6c757d;
+    margin-bottom: 8px;
+    line-height: 1.4;
+}
+
+.reflection-suggestions li:last-child {
+    margin-bottom: 0;
+}
+
+.reflection-suggestions li strong {
+    color: rgb(22, 71, 106);
+    font-weight: 600; /* Make the title stand out */
 }
